@@ -1,10 +1,9 @@
 import os
-import sys
 import numpy as np
 
-import tvm
-from tvm import relay, autotvm, auto_scheduler
+from tvm import relay, transform, autotvm, auto_scheduler
 from tvm.contrib import ndk
+from tvm.target import Target
 
 from . import ansor_tuner_options, autotvm_tuner_options
 from . import view_folder
@@ -25,6 +24,7 @@ class Executor:
         self.args = args
         if 'tuner' in self.args:
             self.log_file = os.path.join(log_dir, f"{self.args['name']}.{self.args['tuner']}.json")
+        self.target = Target(self.args['target'], host=self.args['target_host'])
 
     def _connect_tracker(self):
         from tvm import rpc
@@ -76,28 +76,27 @@ class Executor:
 
             # do tuning
             tuner_options['n_trial'] = min(tuner_options['n_trial'], len(task.config_space))
-            tuner_options['callbacks'].insert(0, autotvm.callback.progress_bar(tuner_options['n_trial'], prefix=prefix))
-            print("Number of trials as len of config_space: " + str(tuner_options['n_trial']))
-            sys.stdout.flush()
-
+            tuner_options['callbacks'].append(autotvm.callback.progress_bar(tuner_options['n_trial'], prefix=prefix))
+            
             tuner_obj.tune(**tuner_options)
+            tuner_options['callbacks'].pop()
 
     def compile_autotvm(self, mod, params, log_file=None):
         if log_file is None:
             log_file = self.log_file
         with autotvm.apply_history_best(log_file):
             print("Compile...")
-            with tvm.transform.PassContext(opt_level=3):
+            with transform.PassContext(opt_level=3):
                 lib = relay.build_module.build(
-                    mod, target=self.args['target'], target_host=self.args['target_host'], params=params)
+                    mod, target=self.target, params=params)
         lib_path = os.path.join(lib_dir, f"{self.args['name']}.atvm.so")
         print("Source object was compiled at %s" % lib_path)
         lib.export_library(lib_path, ndk.create_shared)
 
     def tune_ansor(self, mod, params):
-        print("Extract autotvm tasks...")
+        print("Extract ansor tasks...")
         tasks, task_weights = auto_scheduler.extract_tasks(
-            mod["main"], params, target=self.args['target'], target_host=self.args['target_host'])
+            mod["main"], params, target=self.target)
         
         for idx, task in enumerate(tasks):
             print("========== Task %d  (workload key: %s) ==========" %
@@ -114,9 +113,8 @@ class Executor:
             log_file = self.log_file
         with auto_scheduler.ApplyHistoryBest(log_file):
             print("Compile...")
-            with tvm.transform.PassContext(opt_level=3, config={"relay.backend.use_auto_scheduler": True}):
-                lib = relay.build(mod, target=self.args['target'],
-                                  target_host=self.args['target_host'], params=params)
+            with transform.PassContext(opt_level=3, config={"relay.backend.use_auto_scheduler": True}):
+                lib = relay.build(mod, target=self.target, params=params)
         lib_path = os.path.join(lib_dir, f"{self.args['name']}.ansor.so")
         print("Source object was compiled at %s" % lib_path)
         lib.export_library(lib_path, ndk.create_shared)

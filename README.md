@@ -6,9 +6,9 @@ A feature of the project is that it uses the functionality of the [TVM](https://
 ## Quickstart
 Run the following code inside the repository
 ```console
-foo@bar:~$ /usr/bin/python -m pip install --upgrade pip build setuptools
-foo@bar:~$ /usr/bin/python -m build --sdist --wheel
-foo@bar:~$ usr/bin/python -m pip install . --prefer-binary --force-reinstall --find-links dist/
+foo@bar:~$ python -m pip install --upgrade pip build setuptools
+foo@bar:~$ python -m build --sdist --wheel
+foo@bar:~$ python -m pip install . --prefer-binary --force-reinstall --find-links dist/
 ```
 Tools are now available from the command line
 ```console
@@ -24,7 +24,7 @@ Program for cross-compilation and collection inference statistics. It works in t
 foo@bar:~$ cross-compile tune atvm mace_mobilenet_v1 -p 9090 -k sd888
 ```
 `~$ cross-compile exec` measure the execution time of source object on the passed device. It can accept JSON obtained as a result of tuning, while additionally compiling 
-(specify --target and --target_host if needed).
+(specify `--target` and `--target_host` if needed).
 ```console
 foo@bar:~$ cross-compile exec atvm sd888.mace_mobilenet_v1.float32.atvm.so -p 9090 -k kirin710
 ```
