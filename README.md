@@ -37,6 +37,6 @@ This command allows you to visually evaluate and compare the quality of tuning o
 ```console
 foo@bar:~$ config-overlay `cross-compile view`/logs/*mobilenet_v1.float32.atvm.json
 ```
-<img src="img/6.conv2d_NCHWc.x86.%5B1%2C128%2C56%2C56%5D.png" alt="output" width="80%"/>
+<img src="img/6.conv2d_NCHWc.x86.%5B1%2C128%2C56%2C56%5D.png" alt="output" width="80%" class="center"/>
 
 On the chart, the indices are sorted by the inference time of the first specified layer. It is easy to see that after sorting one of the graphs, the rest also show growth.
