@@ -3,7 +3,7 @@ import typing as tp
 
 import click
 
-from .model_importer import ModelImporter
+from ..model_importer import ModelImporter
 from ..executor import Executor
 from .. import target, target_host, log_dir
 

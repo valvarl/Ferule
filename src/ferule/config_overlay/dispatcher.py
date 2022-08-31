@@ -4,8 +4,10 @@ from enum import Enum
 from ordered_set import OrderedSet
 
 from tvm import relay, transform
-from tvm import autotvm
+from tvm import autotvm, auto_scheduler
 from tvm.ir import IRModule
+
+from . import ModelImporter
 
 
 class Tuner(Enum):
@@ -15,26 +17,47 @@ class Tuner(Enum):
 
 
 class Layer:
-    def __init__(self, tuner=Tuner.UNKNOWN) -> None:
+    def __init__(self, tuner=Tuner.UNKNOWN, model: tp.Optional[str] = None, 
+        dtype: tp.Optional[str] = None) -> None:
         self.tuner = tuner
         self.configs = []
+        self.model = model
+        self.dtype = dtype
 
     def add_config(self, config: dict) -> None:
         self.configs.append(config)
 
     def create_task(self):
         from tvm import relay
-        input = self.configs[0]['input']
-        target, task_name, args, _ = input
-        
-        data, kernel, strides, padding, dilation, data_layout, _, dtype = args
-        data = relay.var("data", shape=data[1], dtype=dtype)
-        kernel_size = (kernel[1][2], kernel[1][3]) if data_layout == "NCHW" else (kernel[1][1], kernel[1][2])
-        kernel = relay.var("kernel", shape=kernel[1], dtype=dtype)
+        if self.tuner == Tuner.ATVM:
+            input = self.configs[0]['input']
+            target, task_name, args, _ = input
+            
+            data, kernel, strides, padding, dilation, data_layout, _, dtype = args
+            data = relay.var("data", shape=data[1], dtype=dtype)
+            kernel_size = (kernel[1][2], kernel[1][3]) if data_layout == "NCHW" else (kernel[1][1], kernel[1][2])
+            kernel = relay.var("kernel", shape=kernel[1], dtype=dtype)
 
-        self.out = relay.nn.conv2d(data, kernel, strides=strides, padding=padding, dilation=dilation, kernel_size=kernel_size, 
-            data_layout=data_layout, out_dtype=dtype)
-        self.mod = IRModule.from_expr(self.out)
+            self.out = relay.nn.conv2d(data, kernel, strides=strides, padding=padding, dilation=dilation, kernel_size=kernel_size, 
+                data_layout=data_layout, out_dtype=dtype)
+            self.mod = IRModule.from_expr(self.out)
+        
+        elif self.tuner == Tuner.ANSOR:
+            importer = ModelImporter()
+            mod, params = importer(self.model, tuner="tuner", dtype=self.dtype)
+
+            self.workload = self.configs[0]['i'][0]
+
+            tasks, task_weights = auto_scheduler.extract_tasks(
+                mod["main"], params, target=self.target)
+            
+            for idx, task in enumerate(tasks):
+                print("========== Task %d  (workload key: %s) ==========" %
+                    (idx, task.workload_key))
+                # print(task.compute_dag)
+                if self.workload == task.workload_key:
+                    self.task: auto_scheduler.SearchTask = task
+                    break
 
 
     @property
@@ -55,8 +78,28 @@ class Layer:
 
 
 class HandleFile:
-    def __init__(self, file) -> None:
+    def __init__(self, file: str, model: tp.Optional[str] = None, dtype: str = "float32") -> None:
         self.file = file
+        self.model = None
+        for m in ModelImporter.available_models():
+            if m in self.file:
+                self.model = m
+                break
+        
+        if self.model is None:
+            if model is not None:
+                self.model = model
+            else:
+                raise RuntimeError("Model must be specified.")
+
+        self.dtype = None
+        if "float32" in self.file:
+            self.dtype = "float32"
+        elif "float16" in self.file:
+            self.dtype = "float16"
+        else:
+            self.dtype = dtype
+
         with open(self.file) as inf:
             self.tuner = Tuner.UNKNOWN
             line = json.loads(inf.readline())
@@ -82,7 +125,7 @@ class HandleFile:
                     if config_index > layer_config['config']['index']:
                         if self.full_layer_list != []:
                             self.full_layer_list[-1].create_task()
-                        self.full_layer_list.append(Layer(Tuner.ATVM))
+                        self.full_layer_list.append(Layer(Tuner.ATVM, self.model, self.dtype))
                         config_index = 0
                         layer += 1
                     else:
@@ -95,7 +138,9 @@ class HandleFile:
                     layer_config = json.loads(line)
                     if layer != layer_config['i'][0][0]:
                         layer = layer_config['i'][0][0]
-                        self.full_layer_list.append(Layer(Tuner.ANSOR))
+                        if self.full_layer_list != []:
+                            self.full_layer_list[-1].create_task()
+                        self.full_layer_list.append(Layer(Tuner.ANSOR, self.model, self.dtype))
                         layer_index += 1
                     self.full_layer_list[-1].add_config(layer_config)
         

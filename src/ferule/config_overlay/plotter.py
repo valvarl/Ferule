@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
+import tvm
 from tvm.contrib import utils
 
 from ..executor import Executor
@@ -66,7 +67,18 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
                     executor.compile_autotvm(layer.mod, None, tmp.relpath('config.json'), tmp.path)
                     data[config_idx][layer_idx]  = executor.benchmark()
     if layer.tuner == Tuner.ANSOR:
-        pass
+        tuner = "ansor"
+        name = "123"
+        for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
+            for layer_idx, executor in enumerate(executors):
+                with open(tmp.relpath('config.json'), 'w') as conf:
+                    json.dump(layer.configs[config_idx], conf)
+                
+                schedule, args = layer.task.apply_best(tmp.relpath('config.json'))
+                mod = tvm.lower(schedule, args)
+                executor.compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
+                data[config_idx][layer_idx]  = executor.benchmark()
+        
     
     tmp.remove()
     df = pd.DataFrame(data, columns=[executor.key for executor in executors]).sort_values(executors[0].key)

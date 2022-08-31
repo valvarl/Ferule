@@ -7,8 +7,8 @@ from tvm import autotvm, auto_scheduler
 from tvm.contrib import ndk
 from tvm.target import Target
 
-from .cross_compile import target, target_host, lib_dir
-from .cross_compile import ansor_tuner_options, autotvm_tuner_options
+from . import target, target_host, lib_dir
+from . import ansor_tuner_options, autotvm_tuner_options
 
 
 class Executor:

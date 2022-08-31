@@ -7,9 +7,13 @@ import click
 from . import HandleFile, Executor
 from . import draw_config_overlay_graph, mesure_and_draw_co_graph
 from .. import target, target_host
+from ..model_importer import ModelImporter
 
 @click.command()
 @click.argument('logs', nargs=-1, type=click.Path(exists=True, resolve_path=True), required=True)
+@click.option('-m', '--model',  type=click.Choice(ModelImporter.available_models()), default=None)
+@click.option('-t', '--type', 'dtype', type=click.Choice(['float16', 'float32']), default='float32', show_default=True,
+              help='Specify whether the model should be run with single or half precision floating point values')
 @click.option('-l', '--layer', 'layers', multiple=True, type=int, 
 help='The indices of the layers to be rendered. By default, the script builds graphs for all layers.')
 @click.option('-r', '--rpc_tracker_host', 'host', envvar='TVM_TRACKER_HOST', help='RPC tracker host IP address')
@@ -18,16 +22,17 @@ help='The indices of the layers to be rendered. By default, the script builds gr
 help='List of RPC keys for which execution time will be measured')
 @click.option('-T', '--target', default=target, show_default=True, help='Compilation target')
 @click.option('-H', '--target_host', default=target_host, show_default=True, help='Compilation host target')
-def cli(logs, layers: tp.Sequence[str], host: str, port: int, keys: tp.Sequence[str], target: str, target_host: str):
+def cli(logs, model: tp.Optional[str], dtype: str, layers: tp.Sequence[str], 
+    host: str, port: int, keys: tp.Sequence[str], target: str, target_host: str):
     """Takes information about the network configuration from log file(s) and builds a comparative graph.
 
     LOGS is a list of log files.
 
     Note: Don't specify RPC keys unless you plan to measure execution time. Otherwise, the measurement results will be taken from the logs.
     """
-    handlers = [HandleFile(log) for log in logs]
+    handlers = [HandleFile(log, model, dtype) for log in logs]
     indices = layers if layers else list(range(len(handlers[0])))
-    if keys == []:
+    if not keys:
         records = [len(handler) for handler in handlers]
         if len(set(records)) != 1:
             warnings.warn("The logs contain a different number of entries. If a conflict occurs, the last entry will be used.")
