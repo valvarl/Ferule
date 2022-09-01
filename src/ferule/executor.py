@@ -2,6 +2,7 @@ import os
 import typing as tp
 import numpy as np
 
+import tvm
 from tvm import relay, transform
 from tvm import autotvm, auto_scheduler
 from tvm.contrib import ndk
@@ -107,7 +108,10 @@ class Executor:
         with auto_scheduler.ApplyHistoryBest(log_file):
             print("Compile...")
             with transform.PassContext(opt_level=3, config={"relay.backend.use_auto_scheduler": True}):
-                lib = relay.build(mod, target=self.target, params=params)
+                if params is not None:  # compile whole model
+                    lib = relay.build(mod, target=self.target, params=params)
+                else:  # compile one task layer
+                    lib = tvm.build(mod, target=self.target)
         self.lib_path = os.path.join(lib_dir, os.path.basename(log_file).rstrip('.json ') + '.so')
         print("Source object was compiled at %s" % self.lib_path)
         lib.export_library(self.lib_path, ndk.create_shared)

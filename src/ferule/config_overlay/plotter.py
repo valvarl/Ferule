@@ -56,7 +56,6 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
     
     data = [[None for j in range(len(executors))] for i in range(len(layer.configs))]
     if layer.tuner == Tuner.ATVM:
-        tuner = "atvm"
         name = "%d.%s.%s" % (index, layer.configs[0]['input'][1], layer.configs[0]['input'][2][0][1])
         name = name.replace(" ", "")
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
@@ -66,8 +65,8 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
                         json.dump(layer.configs[config_idx], conf)
                     executor.compile_autotvm(layer.mod, None, tmp.relpath('config.json'), tmp.path)
                     data[config_idx][layer_idx]  = executor.benchmark()
+    
     if layer.tuner == Tuner.ANSOR:
-        tuner = "ansor"
         name = "123"
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
             for layer_idx, executor in enumerate(executors):
@@ -89,9 +88,9 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
     plt.ylabel("time, ms", fontsize=14)
     plt.plot(df)
     plt.legend(df.columns, prop={'size': 12})
-    if not os.path.exists(os.path.join(output_dir, tuner)):
-        os.makedirs(os.path.join(output_dir, tuner))
-    plt.savefig(os.path.join(output_dir, tuner, name + ".png"))
+    if not os.path.exists(os.path.join(output_dir, layer.tuner.value)):
+        os.makedirs(os.path.join(output_dir, layer.tuner.value))
+    plt.savefig(os.path.join(output_dir, layer.tuner.value, name + ".png"))
     plt.close()
 
 @contextlib.contextmanager

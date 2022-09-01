@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import typing as tp
 from enum import Enum
@@ -6,29 +8,27 @@ from ordered_set import OrderedSet
 from tvm import relay, transform
 from tvm import autotvm, auto_scheduler
 from tvm.ir import IRModule
+from tvm.target import Target
 
-from . import ModelImporter
+from ..model_importer import ModelImporter
 
 
 class Tuner(Enum):
-    UNKNOWN = 0,
-    ATVM = 1,
-    ANSOR = 2
+    UNKNOWN = "unknown",
+    ATVM = "atvm",
+    ANSOR = "ansor"
 
 
 class Layer:
-    def __init__(self, tuner=Tuner.UNKNOWN, model: tp.Optional[str] = None, 
-        dtype: tp.Optional[str] = None) -> None:
-        self.tuner = tuner
+    def __init__(self, hf: HandleFile) -> None:
         self.configs = []
-        self.model = model
-        self.dtype = dtype
+        self.hf = hf
+        self.tuner = self.hf.tuner
 
     def add_config(self, config: dict) -> None:
         self.configs.append(config)
 
-    def create_task(self):
-        from tvm import relay
+    def create_task(self) -> None:
         if self.tuner == Tuner.ATVM:
             input = self.configs[0]['input']
             target, task_name, args, _ = input
@@ -43,22 +43,14 @@ class Layer:
             self.mod = IRModule.from_expr(self.out)
         
         elif self.tuner == Tuner.ANSOR:
-            importer = ModelImporter()
-            mod, params = importer(self.model, tuner="tuner", dtype=self.dtype)
-
-            self.workload = self.configs[0]['i'][0]
-
-            tasks, task_weights = auto_scheduler.extract_tasks(
-                mod["main"], params, target=self.target)
+            workload_key, target, _, target_host, _, _ = self.configs[0]['i'][0]
             
-            for idx, task in enumerate(tasks):
-                print("========== Task %d  (workload key: %s) ==========" %
-                    (idx, task.workload_key))
-                # print(task.compute_dag)
-                if self.workload == task.workload_key:
+            for task in self.hf.tasks:
+                if workload_key == task.workload_key:
                     self.task: auto_scheduler.SearchTask = task
-                    break
-
+                    return
+            
+            raise RuntimeError("Workload key %s not found in model %s." % (str(self.workload_key), self.hf.model))
 
     @property
     def name(self) -> str:
@@ -105,8 +97,11 @@ class HandleFile:
             line = json.loads(inf.readline())
             if 'i' in line and 'r' in line:
                 self.tuner = Tuner.ANSOR
+                self.workload_key, target, _, target_host, _, _ = line['i'][0]
+                self.target = Target(target, host=target_host)
             elif 'input' in line and 'result' in line:
                 self.tuner = Tuner.ATVM
+                self.target = Target(line['input'][0])
             else:
                 class FileFormatError(Exception):
                     def __init__(self, message) -> None:
@@ -116,6 +111,11 @@ class HandleFile:
         self.__post_init__()
 
     def __post_init__(self):
+        importer = ModelImporter()
+        self.mod, self.params = importer(self.model, tuner="atvm" if self.tuner == Tuner.ATVM else "ansor", dtype=self.dtype)
+        self.tasks, self.task_weights = auto_scheduler.extract_tasks(
+                self.mod["main"], self.params, target=self.target)
+
         self.full_layer_list: tp.List[Layer] = []
         with open(self.file) as inf:
             if self.tuner == Tuner.ATVM:
@@ -125,7 +125,7 @@ class HandleFile:
                     if config_index > layer_config['config']['index']:
                         if self.full_layer_list != []:
                             self.full_layer_list[-1].create_task()
-                        self.full_layer_list.append(Layer(Tuner.ATVM, self.model, self.dtype))
+                        self.full_layer_list.append(Layer(self))
                         config_index = 0
                         layer += 1
                     else:
@@ -140,7 +140,7 @@ class HandleFile:
                         layer = layer_config['i'][0][0]
                         if self.full_layer_list != []:
                             self.full_layer_list[-1].create_task()
-                        self.full_layer_list.append(Layer(Tuner.ANSOR, self.model, self.dtype))
+                        self.full_layer_list.append(Layer(self))
                         layer_index += 1
                     self.full_layer_list[-1].add_config(layer_config)
         
