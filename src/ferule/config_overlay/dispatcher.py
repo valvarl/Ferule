@@ -54,7 +54,13 @@ class Layer:
 
     @property
     def name(self) -> str:
-        return '%d.%s.%s' % (self.index, self.inp[1], self.inp[2][0][1])
+        if self.tuner == Tuner.ATVM:
+            name = "%s.%s" % (self.configs[0]['input'][1], self.configs[0]['input'][2][0][1])
+            return name.replace(" ", "")
+        elif self.tuner == Tuner.ANSOR:
+            name = ".".join([str(j) for j in json.loads(self.configs[0]['i'][0][0])[1:]])
+            return name.replace(" ", "")
+        return self.tuner.name        
 
     def __hash__(self) -> int:
         def tupleit(t):

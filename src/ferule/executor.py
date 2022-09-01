@@ -142,3 +142,30 @@ class Executor:
         self._disconnect_tracker()
 
         return np.mean(prof_res)
+
+    def xbenchmark(self, input, dtype: str = "float32", input_path=None) -> float:
+        if self.remote is None:
+            self._connect_tracker()
+
+        if input_path is None:
+            input_path = self.lib_path
+
+        print("Uploading binary...")
+        self.remote.upload(input_path)
+        lib = self.remote.load_module(os.path.basename(input_path))
+        ctx = self.remote.cpu(0)
+
+        inputs = []
+        for shape in input:
+            inputs.append(tvm.nd.array(np.random.uniform(size=shape).astype(dtype), ctx))
+
+        time_f = lib.time_evaluator(lib.entry_name, ctx, number=10)
+        prof_res = np.array(time_f(*inputs).results) * 1e3  # convert to millisecond
+        mean_res, std_res = np.mean(prof_res), np.std(prof_res)
+        print(
+            "Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res)
+        )
+
+        self._disconnect_tracker()
+
+        return np.mean(prof_res)

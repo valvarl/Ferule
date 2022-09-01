@@ -56,8 +56,6 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
     
     data = [[None for j in range(len(executors))] for i in range(len(layer.configs))]
     if layer.tuner == Tuner.ATVM:
-        name = "%d.%s.%s" % (index, layer.configs[0]['input'][1], layer.configs[0]['input'][2][0][1])
-        name = name.replace(" ", "")
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
             with silence():
                 for layer_idx, executor in enumerate(executors):
@@ -67,22 +65,23 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
                     data[config_idx][layer_idx]  = executor.benchmark()
     
     if layer.tuner == Tuner.ANSOR:
-        name = "123"
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
-            for layer_idx, executor in enumerate(executors):
-                with open(tmp.relpath('config.json'), 'w') as conf:
-                    json.dump(layer.configs[config_idx], conf)
-                
-                schedule, args = layer.task.apply_best(tmp.relpath('config.json'))
-                mod = tvm.lower(schedule, args)
-                executor.compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
-                data[config_idx][layer_idx]  = executor.benchmark()
-        
+            with silence():
+                for layer_idx, executor in enumerate(executors):
+                    with open(tmp.relpath('config.json'), 'w') as conf:
+                        json.dump(layer.configs[config_idx], conf)
+                    
+                    schedule, args = layer.task.apply_best(tmp.relpath('config.json'))
+                    mod = tvm.lower(schedule, args)
+                    executor.compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
+                    input = json.loads(layer.configs[config_idx]['i'][0][0])[1:]
+                    data[config_idx][layer_idx]  = executor.xbenchmark(input, layer.hf.dtype)    
     
     tmp.remove()
     df = pd.DataFrame(data, columns=[executor.key for executor in executors]).sort_values(executors[0].key)
     df.index = range(len(layer.configs))
     fig = plt.figure(figsize=(8, 6))
+    name = "%d.%s" % (index, layer.name)
     fig.suptitle(name, fontsize=16)
     plt.xlabel("index", fontsize=14)
     plt.ylabel("time, ms", fontsize=14)
