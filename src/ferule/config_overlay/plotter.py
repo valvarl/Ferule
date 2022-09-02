@@ -67,15 +67,17 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
     if layer.tuner == Tuner.ANSOR:
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
             with silence():
-                for layer_idx, executor in enumerate(executors):
-                    with open(tmp.relpath('config.json'), 'w') as conf:
-                        json.dump(layer.configs[config_idx], conf)
-                    
+                with open(tmp.relpath('config.json'), 'w') as conf:
+                    json.dump(layer.configs[config_idx], conf)
+                try:
                     schedule, args = layer.task.apply_best(tmp.relpath('config.json'))
-                    mod = tvm.lower(schedule, args)
-                    executor.compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
-                    input = json.loads(layer.configs[config_idx]['i'][0][0])[1:]
-                    data[config_idx][layer_idx]  = executor.xbenchmark(input, layer.hf.dtype)    
+                except RuntimeError:
+                    continue
+                mod = tvm.lower(schedule, args)
+                executors[0].compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
+                input = json.loads(layer.configs[config_idx]['i'][0][0])[1:]
+                for layer_idx, executor in enumerate(executors):
+                    data[config_idx][layer_idx]  = executor.xbenchmark(input, layer.hf.dtype, tmp.relpath('config.so'))     
     
     tmp.remove()
     df = pd.DataFrame(data, columns=[executor.key for executor in executors]).sort_values(executors[0].key)
