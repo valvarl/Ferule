@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 
 import tvm
+from tvm.autotvm import task
 from tvm.contrib import utils
 
 from ..executor import Executor
@@ -58,11 +59,15 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
     if layer.tuner == Tuner.ATVM:
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
             with silence():
+                with open(tmp.relpath('config.json'), 'w') as conf:
+                    json.dump(layer.configs[config_idx], conf)
+                config = task.space.ConfigEntity.from_json_dict(layer.configs[config_idx]['config'])
+                with executors[0].target:
+                    schedule, args = layer.task.instantiate(config)
+                mod = tvm.lower(schedule, args)
+                executors[0].compile_autotvm(mod, None, tmp.relpath('config.json'), tmp.path)
                 for layer_idx, executor in enumerate(executors):
-                    with open(tmp.relpath('config.json'), 'w') as conf:
-                        json.dump(layer.configs[config_idx], conf)
-                    executor.compile_autotvm(layer.mod, None, tmp.relpath('config.json'), tmp.path)
-                    data[config_idx][layer_idx]  = executor.benchmark()
+                    data[config_idx][layer_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so')) 
     
     if layer.tuner == Tuner.ANSOR:
         for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
@@ -75,9 +80,8 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
                     continue
                 mod = tvm.lower(schedule, args)
                 executors[0].compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
-                input = json.loads(layer.configs[config_idx]['i'][0][0])[1:]
                 for layer_idx, executor in enumerate(executors):
-                    data[config_idx][layer_idx]  = executor.xbenchmark(input, layer.hf.dtype, tmp.relpath('config.so'))     
+                    data[config_idx][layer_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so'))           
     
     tmp.remove()
     df = pd.DataFrame(data, columns=[executor.key for executor in executors]).sort_values(executors[0].key)
@@ -89,9 +93,9 @@ def mesure_and_draw_co_graph(layer: Layer, executors: tp.Sequence[Executor], ind
     plt.ylabel("time, ms", fontsize=14)
     plt.plot(df)
     plt.legend(df.columns, prop={'size': 12})
-    if not os.path.exists(os.path.join(output_dir, layer.tuner.value)):
-        os.makedirs(os.path.join(output_dir, layer.tuner.value))
-    plt.savefig(os.path.join(output_dir, layer.tuner.value, name + ".png"))
+    if not os.path.exists(os.path.join(output_dir, *layer.tuner.value)):
+        os.makedirs(os.path.join(output_dir, *layer.tuner.value))
+    plt.savefig(os.path.join(output_dir, *layer.tuner.value, name + ".png"))
     plt.close()
 
 @contextlib.contextmanager

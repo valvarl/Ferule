@@ -13,6 +13,10 @@ from tvm.target import Target
 from ..model_importer import ModelImporter
 
 
+def tupleit(t):
+    return tuple(map(tupleit, t)) if isinstance(t, (list, tuple)) else t
+
+
 class Tuner(Enum):
     UNKNOWN = "unknown",
     ATVM = "atvm",
@@ -33,14 +37,11 @@ class Layer:
             input = self.configs[0]['input']
             target, task_name, args, _ = input
             
-            data, kernel, strides, padding, dilation, data_layout, _, dtype = args
-            data = relay.var("data", shape=data[1], dtype=dtype)
-            kernel_size = (kernel[1][2], kernel[1][3]) if data_layout == "NCHW" else (kernel[1][1], kernel[1][2])
-            kernel = relay.var("kernel", shape=kernel[1], dtype=dtype)
-
-            self.out = relay.nn.conv2d(data, kernel, strides=strides, padding=padding, dilation=dilation, kernel_size=kernel_size, 
-                data_layout=data_layout, out_dtype=dtype)
-            self.mod = IRModule.from_expr(self.out)
+            args = tupleit(args)
+            for task in self.hf.tasks:
+                if args == task.__dict__['args']:
+                    self.task: autotvm.task.task.Task = task
+                    return
         
         elif self.tuner == Tuner.ANSOR:
             workload_key, target, _, target_host, _, _ = self.configs[0]['i'][0]
@@ -50,7 +51,7 @@ class Layer:
                     self.task: auto_scheduler.SearchTask = task
                     return
             
-            raise RuntimeError("Workload key %s not found in model %s." % (str(self.workload_key), self.hf.model))
+            raise RuntimeError("Workload key %s not found in model %s." % (str(workload_key), self.hf.model))
 
     @property
     def name(self) -> str:
@@ -63,8 +64,6 @@ class Layer:
         return self.tuner.name        
 
     def __hash__(self) -> int:
-        def tupleit(t):
-            return tuple(map(tupleit, t)) if isinstance(t, (list, tuple)) else t
         if self.tuner == Tuner.ATVM:
             tgt, task_name, task_args, task_kwargs = self.configs[0]["input"]
             return hash(tupleit((tgt, task_name, task_args)))
@@ -119,8 +118,12 @@ class HandleFile:
     def __post_init__(self):
         importer = ModelImporter()
         self.mod, self.params = importer(self.model, tuner="atvm" if self.tuner == Tuner.ATVM else "ansor", dtype=self.dtype)
-        self.tasks, self.task_weights = auto_scheduler.extract_tasks(
-                self.mod["main"], self.params, target=self.target)
+        if self.tuner == Tuner.ATVM:
+            self.tasks = autotvm.task.extract_from_program(
+                self.mod["main"], target=self.target, params=self.params)
+        else:
+            self.tasks, self.task_weights = auto_scheduler.extract_tasks(
+                    self.mod["main"], self.params, target=self.target)
 
         self.full_layer_list: tp.List[Layer] = []
         with open(self.file) as inf:
@@ -149,6 +152,9 @@ class HandleFile:
                         self.full_layer_list.append(Layer(self))
                         layer_index += 1
                     self.full_layer_list[-1].add_config(layer_config)
+            
+            if self.full_layer_list != []:
+                self.full_layer_list[-1].create_task()
         
         self.layers = OrderedSet()
         for layer in self.full_layer_list:

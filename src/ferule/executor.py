@@ -23,7 +23,6 @@ class Executor:
         self.target = Target(target, host=target_host)
         self.host, self.port, self.key = host, port, key
         self.tuner, self.method = tuner, method
-        
 
     def _connect_tracker(self):
         from tvm import rpc
@@ -83,8 +82,10 @@ class Executor:
         with autotvm.apply_history_best(log_file):
             print("Compile...")
             with transform.PassContext(opt_level=3):
-                lib = relay.build_module.build(
-                    mod, target=self.target, params=params)
+                if params is not None:
+                    lib = relay.build_module.build(mod, target=self.target, params=params)
+                else:  # compile one task layer
+                    lib = tvm.build(mod, target=self.target)
         self.lib_path = os.path.join(lib_dir, os.path.basename(log_file).rstrip('.json ') + '.so')
         print("Source object was compiled at %s" % self.lib_path)
         lib.export_library(self.lib_path, ndk.create_shared)
@@ -135,15 +136,11 @@ class Executor:
         ftimer = m.module.time_evaluator("run", ctx, repeat=10, min_repeat_ms=500)
         prof_res = np.array(ftimer().results) * 1e3  # convert to millisecond
         mean_res, std_res = np.mean(prof_res), np.std(prof_res)
-        print(
-            "Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res)
-        )
-
+        print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res))
         self._disconnect_tracker()
-
         return np.mean(prof_res)
 
-    def xbenchmark(self, input, dtype: str = "float32", input_path=None) -> float:
+    def xbenchmark(self, args: tp.Sequence[tvm.te.tensor.Tensor], dtype: str = "float32", input_path=None) -> float:
         if self.remote is None:
             self._connect_tracker()
 
@@ -156,16 +153,13 @@ class Executor:
         ctx = self.remote.cpu(0)
 
         inputs = []
-        for shape in input:
+        for tensor in args:
+            shape = [int(j) for j in tensor.shape]
             inputs.append(tvm.nd.array(np.random.uniform(size=shape).astype(dtype), ctx))
 
         time_f = lib.time_evaluator(lib.entry_name, ctx, number=10)
         prof_res = np.array(time_f(*inputs).results) * 1e3  # convert to millisecond
         mean_res, std_res = np.mean(prof_res), np.std(prof_res)
-        print(
-            "Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res)
-        )
-
+        print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res))
         self._disconnect_tracker()
-
         return np.mean(prof_res)

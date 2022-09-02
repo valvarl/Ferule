@@ -8,7 +8,7 @@ A feature of the project is that it uses the functionality of the [TVM](https://
 ## Quickstart
 Run the following code inside the repository
 ```console
-foo@bar:~$ python -m pip install --upgrade pip build setuptools
+foo@bar:~$ python -m pip install --upgrade pip build
 foo@bar:~$ python -m build --sdist --wheel
 foo@bar:~$ python -m pip install . --prefer-binary --force-reinstall --find-links dist/
 ```
@@ -35,8 +35,16 @@ Additionally, there is `~$ cross-compile view` command that displays the path to
 ## config-overlay
 This command allows you to visually evaluate and compare the quality of tuning on each layer.
 ```console
-foo@bar:~$ config-overlay `cross-compile view`/logs/*mobilenet_v1.float32.atvm.json
+foo@bar:~$ config-overlay sd450.mace_mobilenet_v1.float32.atvm.json -k kirin710 -k sd450 -p 9090 --layer 6
 ```
-<img src="img/6.conv2d_NCHWc.x86.%5B1%2C128%2C56%2C56%5D.png" alt="output" width="80%" class="center"/>
+<table class="table table-bordered table-hover table-condensed">
+<thead><tr><th title="Field #1">AutoTVM</th>
+<th title="Field #2">Auto-Scheduler</th>
+</tr></thead>
+<tbody><tr>
+<td><img src="img/6.conv2d_NCHWc.x86.%5B1%2C128%2C56%2C56%5D.png" alt="atvm"/></td>
+<td><img src="img/13.[1,1024,1,1,1].[1001,1024,1,1,1,1].[1,1001,1,1,1].[1,1001,1,1,1].png" alt="ansor"/></td>
+</tr>
+</tbody></table>
 
 On the chart, the indices are sorted by the inference time of the first specified layer. It is easy to see that after sorting one of the graphs, the rest also show growth.
