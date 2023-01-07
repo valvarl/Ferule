@@ -1,5 +1,6 @@
 import os
 import inspect
+import subprocess
 
 from tvm import relay
 
@@ -21,7 +22,7 @@ class ModelImporter:
         raise ValueError("import_" + model + " not found.")
 
 
-    def get_onnx_from_tf1(self, model_url, filename, input_names, output_names, shape_override = None):
+    def get_onnx_from_tf1(self, model_url, filename, input_names, output_names):
         tf_model_file = os.path.join(view_folder, "models", "%s.pb" % filename)
 
         print("Collecting model...")
@@ -31,27 +32,11 @@ class ModelImporter:
         # python -m tf2onnx.convert --graphdef mace_resnet-v2-50.pb --output mace_resnet-v2-50.onnx --inputs input:0[1,224,224,3] --outputs resnet_v2_50/predictions/Reshape_1:0
         onnx_model_file = os.path.join(view_folder, "models", "%s.onnx" % filename)
         if os.path.exists(onnx_model_file) == False:
-            import tf2onnx
-            import tensorflow as tf
-            try:
-                tf_compat_v1 = tf.compat.v1
-            except ImportError:
-                tf_compat_v1 = tf
-            # Tensorflow utility functions
-            import tvm.relay.testing.tf as tf_testing
-
-            with tf_compat_v1.gfile.GFile(tf_model_file, "rb") as f:
-                graph_def = tf_compat_v1.GraphDef()
-                graph_def.ParseFromString(f.read())
-                #graph = tf.import_graph_def(graph_def, name="")
-                # Call the utility to import the graph definition into default graph.
-                graph_def = tf_testing.ProcessGraphDefParam(graph_def)
-
-                model_proto, external_tensor_storage = tf2onnx.convert.from_graph_def(graph_def,
-                    name=filename, input_names=input_names, output_names=output_names,
-                    shape_override = shape_override,
-                    output_path=onnx_model_file)
-
+            inputs = ','.join(v for v in input_names)
+            outputs = ','.join(v for v in output_names)
+            result = subprocess.run(['python', '-m', 'tf2onnx.convert', '--graphdef', tf_model_file, '--output', onnx_model_file, '--inputs', inputs, '--outputs', outputs])
+            assert result.returncode == 0, 'Can\'t get onnx model from pb file'
+                
         return onnx_model_file
 
 
@@ -62,9 +47,7 @@ class ModelImporter:
         print("Collecting model...")
         from tvm.contrib import download
         download.download(model_url, tf_model_file)
-        # converted using command line:
-        # python -m tf2onnx.convert --graphdef mace_resnet-v2-50.pb --output mace_resnet-v2-50.onnx --inputs input:0[1,224,224,3] --outputs resnet_v2_50/predictions/Reshape_1:0
-        onnx_model_file = os.path.join(view_folder, "models", "%s.onnx" % filename)
+
         import tensorflow as tf
         try:
             tf_compat_v1 = tf.compat.v1
@@ -102,18 +85,12 @@ class ModelImporter:
         model_url = "https://cnbj1.fds.api.xiaomi.com/mace/miai-models/resnet-v2-50/resnet-v2-50.pb"
         filename = "mace_resnet-v2-50"
         input_names = ["input:0"]
-        shape_override = {"input:0": [1, 299, 299, 3]}
         output_names = ["resnet_v2_50/predictions/Reshape_1:0"]
-        onnx_model_file = self.get_onnx_from_tf1(model_url, filename, input_names, output_names, shape_override)
+        onnx_model_file = self.get_onnx_from_tf1(model_url, filename, input_names, output_names)
         import onnx
         model = onnx.load(onnx_model_file)
-        mod, params = relay.frontend.from_onnx(model, shape_override, freeze_params=True)
-        # DEELVIN-207
-        # mod = relay.transform.InferType()(mod)
-        # mod = relay.transform.ToMixedPrecision()(mod)
-        # print(mod)
-
-        mod = relay.quantize.prerequisite_optimize(mod, params)
+        shape_dict = {"input:0": [1, 224, 224, 3]}
+        mod, params = relay.frontend.from_onnx(model, shape_dict, freeze_params=True)
 
         # downcast to float16
         if dtype == "float16":
@@ -132,7 +109,6 @@ class ModelImporter:
         model = onnx.load(onnx_model_file)
         shape_dict = {'input:0': [1, 299, 299, 3]}
         mod, params = relay.frontend.from_onnx(model, shape_dict, freeze_params=True)
-        mod = relay.quantize.prerequisite_optimize(mod, params)
         
         # downcast to float16
         if dtype == "float16":
@@ -161,12 +137,10 @@ class ModelImporter:
             with transform.PassContext(opt_level=3):
                 mod = seq(mod)
 
-        mod = relay.quantize.prerequisite_optimize(mod, params)
-
         # downcast to float16
         if dtype == "float16":
             mod = downcast_fp16(mod["main"], mod)
-            mod = relay.quantize.prerequisite_optimize(mod, params)
+        mod = relay.quantize.prerequisite_optimize(mod, params)
         return mod, params
 
    

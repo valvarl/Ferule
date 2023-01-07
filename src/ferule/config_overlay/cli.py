@@ -48,12 +48,19 @@ def cli(logs, model: tp.Optional[str], dtype: str, layers: tp.Sequence[str],
                     
                 labels = [os.path.basename(handler.file).split('.')[0] for handler in handlers]
                 draw_config_overlay_graph(same_layer, labels, index)
-    else:
-        handler = handlers[0]
+    
+    elif len(logs) == 1:
         executors = [Executor(target, target_host, host, port, key) for key in keys]
-        for index, layer in enumerate(handler.layers):
+        for index, layer in enumerate(handlers[0].layers):
             if index in indices:
                 mesure_and_draw_co_graph(layer, executors, index)
+
+    else:
+        executors = [Executor(target, target_host, host, port, key) for key in keys]
+        for index, layers in enumerate(zip(*[handler.layers for handler in handlers])):
+            if index in indices:
+                mesure_and_draw_co_graph(layers, executors, index)
+
 
 if __name__ == '__main__':
     cli()

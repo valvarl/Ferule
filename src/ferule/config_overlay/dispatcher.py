@@ -5,6 +5,7 @@ import typing as tp
 from enum import Enum
 from ordered_set import OrderedSet
 
+import numpy as np
 from tvm import relay, transform
 from tvm import autotvm, auto_scheduler
 from tvm.ir import IRModule
@@ -31,6 +32,12 @@ class Layer:
 
     def add_config(self, config: dict) -> None:
         self.configs.append(config)
+
+    def get_best_time(self) -> float:
+        if self.tuner == Tuner.ATVM: 
+            return np.min([np.mean(config['result'][0]) for config in self.configs if config['result'][1] == 0])
+        elif self.tuner == Tuner.ANSOR:
+            return np.min([np.mean(config['r'][0]) for config in self.configs if config['r'][1] == 0])
 
     def create_task(self) -> None:
         if self.tuner == Tuner.ATVM:
