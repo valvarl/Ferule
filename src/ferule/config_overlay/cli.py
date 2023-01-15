@@ -5,7 +5,7 @@ import typing as tp
 import click
 
 from . import HandleFile, Executor
-from . import draw_config_overlay_graph, mesure_and_draw_co_graph
+from . import get_fast_common_statistic, get_common_statistic
 from .. import target, target_host
 from ..model_importer import ModelImporter
 
@@ -47,19 +47,14 @@ def cli(logs, model: tp.Optional[str], dtype: str, layers: tp.Sequence[str],
                     warnings.warn("Layer %d contains a different number of trials in log files." % index)
                     
                 labels = [os.path.basename(handler.file).split('.')[0] for handler in handlers]
-                draw_config_overlay_graph(same_layer, labels, index)
+                get_fast_common_statistic(same_layer, labels, index)
     
-    elif len(logs) == 1:
-        executors = [Executor(target, target_host, host, port, key) for key in keys]
-        for index, layer in enumerate(handlers[0].layers):
-            if index in indices:
-                mesure_and_draw_co_graph(layer, executors, index)
-
     else:
         executors = [Executor(target, target_host, host, port, key) for key in keys]
-        for index, layers in enumerate(zip(*[handler.layers for handler in handlers])):
+        e = enumerate(handlers[0].layers) if len(logs) == 1 else enumerate(zip(*[handler.layers for handler in handlers]))
+        for index, layers in e:
             if index in indices:
-                mesure_and_draw_co_graph(layers, executors, index)
+                get_common_statistic(layers, executors, index)
 
 
 if __name__ == '__main__':

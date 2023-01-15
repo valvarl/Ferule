@@ -6,9 +6,7 @@ from enum import Enum
 from ordered_set import OrderedSet
 
 import numpy as np
-from tvm import relay, transform
 from tvm import autotvm, auto_scheduler
-from tvm.ir import IRModule
 from tvm.target import Target
 
 from ..model_importer import ModelImporter
@@ -21,7 +19,7 @@ def tupleit(t):
 class Tuner(Enum):
     UNKNOWN = "unknown",
     ATVM = "atvm",
-    ANSOR = "ansor"
+    ANSOR = "ansor",
 
 
 class Layer:

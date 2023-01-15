@@ -8,7 +8,7 @@ view_folder = os.path.join(str(Path.home()), 'ferule')
 if not os.path.exists(view_folder):
     os.makedirs(view_folder)
 
-log_dir = os.path.join(view_folder, "log")
+log_dir = os.path.join(view_folder, "configs")
 lib_dir = os.path.join(view_folder, "lib")
 
 if not os.path.exists(log_dir):
