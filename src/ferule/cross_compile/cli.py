@@ -83,7 +83,7 @@ def cli3():
 @click.command()
 def view():
     """Inspect working directory."""
-    from . import view_folder
+    from .. import view_folder
     click.echo(view_folder)
 
 
