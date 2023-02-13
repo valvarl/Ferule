@@ -31,11 +31,14 @@ class Layer:
     def add_config(self, config: dict) -> None:
         self.configs.append(config)
 
-    def get_best_time(self) -> float:
+    def get_config_time(self, idx):
         if self.tuner == Tuner.ATVM: 
-            return np.min([np.mean(config['result'][0]) for config in self.configs if config['result'][1] == 0])
+            return np.mean(self.configs[idx]['result'][0]) if self.configs[idx]['result'][1] == 0 else 1e9
         elif self.tuner == Tuner.ANSOR:
-            return np.min([np.mean(config['r'][0]) for config in self.configs if config['r'][1] == 0])
+            return np.mean(self.configs[idx]['r'][0]) if self.configs[idx]['r'][1] == 0 else 1e9
+
+    def get_best_time(self) -> float:
+        return np.min([self.get_config_time(config) for config in range(len(self.configs))])
 
     def create_task(self) -> None:
         if self.tuner == Tuner.ATVM:

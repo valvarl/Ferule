@@ -44,7 +44,13 @@ def get_fast_common_statistic(layers: tp.List[Layer], labels: tp.List[str], inde
     visualize_common(layer, index, df)
 
 
-def get_common_statistic(layers: Layer | list[Layer], executors: tp.Sequence[Executor], index: int) -> None:
+def get_common_statistic(
+    layers: Layer | list[Layer], 
+    executors: tp.Sequence[Executor], 
+    index: int, 
+    best: tp.Optional[int] = None
+    ) -> None:
+    
     tmp = utils.tempdir()
     
     if isinstance(layers, tp.Iterable):
@@ -56,38 +62,46 @@ def get_common_statistic(layers: Layer | list[Layer], executors: tp.Sequence[Exe
     for layer_idx, executor in enumerate(executors):
         print(f"Check the availability of {executor.key} device. ", end='')
         # input("Press Enter to continue...")
-        if layer.tuner == Tuner.ATVM:
-            for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
+        configs = range(len(layer.configs))
+        if best is not None:
+            _a = [layer.get_config_time(c) for c in range(len(layer.configs))]
+            configs = np.argsort(_a)[:best]
+
+        for config_idx in tqdm(configs,  desc='Layer %d' % index):
+            with open(tmp.relpath('config.json'), 'w') as conf:
+                json.dump(layer.configs[config_idx], conf)
+
+            for i in range(3):
                 with silence():
-                    with open(tmp.relpath('config.json'), 'w') as conf:
-                        json.dump(layer.configs[config_idx], conf)
-                    config = task.space.ConfigEntity.from_json_dict(layer.configs[config_idx]['config'])
-                    with executors[0].target:
-                        schedule, args = layer.task.instantiate(config)
-                    mod = tvm.lower(schedule, args)
-                    executors[0].compile_autotvm(mod, None, tmp.relpath('config.json'), tmp.path)
-                    data[config_idx][layer_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so')) 
-    
-        if layer.tuner == Tuner.ANSOR:
-            for config_idx in tqdm(range(len(layer.configs)),  desc='Layer %d' % index):
-                with silence():
-                    with open(tmp.relpath('config.json'), 'w') as conf:
-                        json.dump(layer.configs[config_idx], conf)
-                    try:
-                        schedule, args = layer.task.apply_best(tmp.relpath('config.json'))
-                    except RuntimeError:
-                        continue
-                    mod = tvm.lower(schedule, args)
-                    executors[0].compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
-                    data[config_idx][layer_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so'))           
+                    if layer.tuner == Tuner.ATVM:
+                        config = task.space.ConfigEntity.from_json_dict(layer.configs[config_idx]['config'])
+                        with executors[0].target:
+                            schedule, args = layer.task.instantiate(config)
+                        mod = tvm.lower(schedule, args)
+                        executors[0].compile_autotvm(mod, None, tmp.relpath('config.json'), tmp.path)
+                        
+                    if layer.tuner == Tuner.ANSOR:
+                        try:
+                            schedule, args = layer.task.apply_best(tmp.relpath('config.json'))
+                        except RuntimeError:
+                            break
+                        mod = tvm.lower(schedule, args)
+                        executors[0].compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
+
+                try:
+                    data[config_idx][layer_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so'))
+                    break
+                except tvm._ffi.base.TVMError:
+                    print(f'Connection failed, {2 - i} attempts left...')
+                    executor._disconnect_tracker()
     
     tmp.remove()
     df = pd.DataFrame(data, columns=[executor.key for executor in executors])
 
     # calculate metric
     best_config = None
-    if isinstance(layers, tp.Iterable):
-        device_best_time = pd.DataFrame([[l.get_best_time() for l in layers]], columns=['best_' + executor.key for executor in executors]) * 1000
+    if isinstance(layers, tp.Iterable) and len(layers) - 1 == len(executors):  # layers: [<COMMON config>, <BEST 1st>, <BEST 2nd>, ...]
+        device_best_time = pd.DataFrame([[l.get_best_time() for l in layers[1:]]], columns=['best_' + executor.key for executor in executors]) * 1000
         logs = pd.concat([pd.Series([index] * len(df), name='layer'), pd.concat([device_best_time] * len(df), ignore_index=True), df], axis=1)
         device_best_time.columns = [i[5:] for i in device_best_time.columns]
         metric = df.sub(device_best_time.squeeze()).div(device_best_time.squeeze()).sum(axis=1)

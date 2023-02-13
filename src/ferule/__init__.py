@@ -23,7 +23,7 @@ target_host = 'llvm -mtriple=aarch64-linux-android-g++'
 def autotvm_tuner_options(host: str, port: int, key: str, log_file: str):
     builder = autotvm.LocalBuilder(build_func=ndk.create_shared, timeout=15)
     options = {
-        'n_trial': 150,
+        'n_trial': 512,
         'early_stopping': None,
         'measure_option': autotvm.measure_option(
             builder=builder,
@@ -32,6 +32,7 @@ def autotvm_tuner_options(host: str, port: int, key: str, log_file: str):
                 host=host,
                 port=port,
                 number=50,
+                repeat=10,
                 timeout=15,
             ),
         ),

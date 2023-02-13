@@ -22,8 +22,9 @@ help='The indices of the layers to be rendered. By default, the script builds gr
 help='List of RPC keys for which execution time will be measured')
 @click.option('-T', '--target', default=target, show_default=True, help='Compilation target')
 @click.option('-H', '--target_host', default=target_host, show_default=True, help='Compilation host target')
+@click.option('-b', '--best', type=int, default=None, help='Amount of best layers that will be measured on other devices')
 def cli(logs, model: tp.Optional[str], dtype: str, layers: tp.Sequence[str], 
-    host: str, port: int, keys: tp.Sequence[str], target: str, target_host: str):
+    host: str, port: int, keys: tp.Sequence[str], target: str, target_host: str, best: tp.Optional[int]):
     """Takes information about the network configuration from log file(s) and builds a comparative graph.
 
     LOGS is a list of log files.
@@ -54,7 +55,7 @@ def cli(logs, model: tp.Optional[str], dtype: str, layers: tp.Sequence[str],
         e = enumerate(handlers[0].layers) if len(logs) == 1 else enumerate(zip(*[handler.layers for handler in handlers]))
         for index, layers in e:
             if index in indices:
-                get_common_statistic(layers, executors, index)
+                get_common_statistic(layers, executors, index, best)
 
 
 if __name__ == '__main__':
