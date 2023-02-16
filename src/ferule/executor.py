@@ -133,7 +133,7 @@ class Executor:
         m = graph_executor.GraphModule(lib["default"](ctx))
 
         print("Starting measurements...")
-        ftimer = m.module.time_evaluator("run", ctx, repeat=10, min_repeat_ms=500)
+        ftimer = m.module.time_evaluator("run", ctx, number=20, repeat=5)
         prof_res = np.array(ftimer().results) * 1e3  # convert to millisecond
         mean_res, std_res = np.mean(prof_res), np.std(prof_res)
         print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res))
@@ -157,7 +157,7 @@ class Executor:
             shape = [int(j) for j in tensor.shape]
             inputs.append(tvm.nd.array(np.random.uniform(size=shape).astype(dtype), ctx))
 
-        time_f = lib.time_evaluator(lib.entry_name, ctx, number=10)
+        time_f = lib.time_evaluator(lib.entry_name, ctx, number=20, repeat=5)
         prof_res = np.array(time_f(*inputs).results) * 1e3  # convert to millisecond
         mean_res, std_res = np.mean(prof_res), np.std(prof_res)
         print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res))

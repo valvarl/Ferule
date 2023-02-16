@@ -1,9 +1,11 @@
 import io
 import os
+import os.path as osp
 import sys
 import json
 import contextlib
 import typing as tp
+from pathlib import Path
 from tqdm import tqdm
 
 import numpy as np
@@ -19,50 +21,27 @@ from ..executor import Executor
 from .dispatcher import Layer, Tuner
 from .. import view_folder, log_dir
 
-output_dir = os.path.join(view_folder, "plots")
-config_dir = os.path.join(log_dir, "common")
-
-
-def get_fast_common_statistic(layers: tp.List[Layer], labels: tp.List[str], index: int) -> None:
-    '''
-    Useful only for AutoTVM gridsearch algorithm with same number of trials.
-    '''
-    data = [[None for j in range(len(layers))] for i in range(len(layers[0].configs))]
-    if layers[0].tuner == Tuner.ATVM:
-        for layer_idx, layer in enumerate(layers):
-            for config_idx, config in enumerate(layer.configs):
-                if config['result'][1] == 0:  # if no errors occur
-                    data[config_idx][layer_idx] = np.mean(config['result'][0])
-    
-    elif layers[0].tuner == Tuner.ANSOR:
-        for layer_idx, layer in enumerate(layers):
-            for config_idx, config in enumerate(layer.configs):
-                if config['r'][1] == 0 and config_idx < len(data):  # if no errors occur
-                    data[config_idx][layer_idx] = np.mean(config['r'][0])
-    
-    df = pd.DataFrame(data, columns=labels).sort_values(0) * 1000
-    visualize_common(layer, index, df)
+output_dir = osp.join(view_folder, "plots")
+config_dir = osp.join(log_dir, "common")
 
 
 def get_common_statistic(
-    layers: Layer | list[Layer], 
+    layer: Layer, 
     executors: tp.Sequence[Executor], 
     index: int, 
-    best: tp.Optional[int] = None
+    best: tp.Optional[int] = None,
+    estimate: tp.Optional[Path] = None
     ) -> None:
     
     tmp = utils.tempdir()
-    
-    if isinstance(layers, tp.Iterable):
-        layer = layers[0]
-    else:
-        layer = layers 
-
-    data = [[None for j in range(len(executors))] for i in range(len(layer.configs))]
-    for layer_idx, executor in enumerate(executors):
+    data = np.zeros((len(layer.configs), len(executors)))
+    for exec_idx, executor in enumerate(executors):
         print(f"Check the availability of {executor.key} device. ", end='')
         # input("Press Enter to continue...")
         configs = range(len(layer.configs))
+        
+        if estimate is not None:
+            best = 1     
         if best is not None:
             _a = [layer.get_config_time(c) for c in range(len(layer.configs))]
             configs = np.argsort(_a)[:best]
@@ -89,49 +68,81 @@ def get_common_statistic(
                         executors[0].compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
 
                 try:
-                    data[config_idx][layer_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so'))
+                    data[config_idx][exec_idx]  = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so'))
                     break
                 except tvm._ffi.base.TVMError:
                     print(f'Connection failed, {2 - i} attempts left...')
-                    executor._disconnect_tracker()
+                    executor._disconnect_tracker() 
     
     tmp.remove()
-    df = pd.DataFrame(data, columns=[executor.key for executor in executors])
+    devices = [executor.key for executor in executors]
+    stat = pd.DataFrame(data, columns=devices)
+    stat['config'] = [json.dumps(i) for i in layer.configs]
+    stat['layer'] = index
+    stat = stat[[stat.columns[-1]] + stat.columns[:-1].to_list()]
 
-    # calculate metric
-    best_config = None
-    if isinstance(layers, tp.Iterable) and len(layers) - 1 == len(executors):  # layers: [<COMMON config>, <BEST 1st>, <BEST 2nd>, ...]
-        device_best_time = pd.DataFrame([[l.get_best_time() for l in layers[1:]]], columns=['best_' + executor.key for executor in executors]) * 1000
-        logs = pd.concat([pd.Series([index] * len(df), name='layer'), pd.concat([device_best_time] * len(df), ignore_index=True), df], axis=1)
-        device_best_time.columns = [i[5:] for i in device_best_time.columns]
-        metric = df.sub(device_best_time.squeeze()).div(device_best_time.squeeze()).sum(axis=1)
-        logs['metric'] = metric
-        logs['config'] = [json.dumps(i) for i in layer.configs]
-        
-        name = f'{"_".join(device_best_time.columns)}.{layer.hf.model}.{layer.hf.dtype}.{layer.tuner.value[0]}'
-        if not os.path.exists(config_dir):
-            os.makedirs(config_dir)
-        log_file = os.path.join(config_dir, name + ".csv")
-        logs.to_csv(log_file, mode='a', index=False, header=not os.path.isfile(log_file))
-        print(f'Layer {index} inference data saved at: {log_file}')
+    name = f'{"_".join(devices)}.{layer.hf.model}.{layer.hf.dtype}.{layer.tuner.value[0]}'
+    if not osp.exists(config_dir):
+        os.makedirs(config_dir)
+    log_file = osp.join(config_dir, name + (".csv" if estimate is None else f"_best.csv"))
+    stat.to_csv(log_file, mode='a', index=False, header=not osp.isfile(log_file))
+    print(f'Layer {index} inference data saved at: {log_file}')
+
+    if estimate is not None:
+        st = pd.read_csv(estimate)
+        common = calculate_metric(st[st.config == stat.loc[0, 'config']], '')
+        t_min, t_max = min(common['times_min']), max(common['times_min'])
+        t_opt = stat[devices].loc[0]
+        est = 1 - (t_opt - t_min) / (t_max - t_min)
+        metric = common['best_metric']
+        print(f'\tLayer {index}: t_opt={[round(t, 6) for t in t_opt]}, t_min={t_min:.6f}, t_max={t_max:.6f}, ' \
+            f'metric={metric:.6f}, est={[round(i, 6) for i in est]}, mean_est={est.mean():.6f}')
+
+
+def calculate_metric(
+    stat: pd.DataFrame,
+    name: str,
+    vis: bool = False, 
+    verbose: bool = False
+    ) -> dict:
     
-        metric_sorted = metric[metric != 0].sort_values()
-        df_sorted = df.iloc[metric_sorted.index]
-        best_config = df_sorted.index[0]
-        with open(os.path.join(config_dir, name + '.json'), 'a') as ouf:
-            json.dump(layer.configs[best_config], ouf)
+    devices = stat.columns[1: -1]
+    stat = stat.loc[(stat[devices] > 0).all(axis=1)]
+    device_best_time = stat[devices].min()
+
+    pd.set_option('mode.chained_assignment', None)
+    stat['metric']  = stat[devices].sub(device_best_time.squeeze()).div(device_best_time.squeeze()).sum(axis=1)
+
+    metric_sorted = stat.metric.sort_values()
+    stat_sorted = stat.loc[metric_sorted.index]
+    best_config = stat_sorted.index[0]
+    best_config_index = stat.reset_index().loc[stat.reset_index()['index'] == best_config].dropna().index[0]
+
+    res = dict(
+        layer=stat.layer.iloc[0],
+        best_config=best_config,
+        best_metric=stat['metric'].min(),
+        times=stat.loc[best_config, devices],
+        times_order=[i.tolist().index(best_config_index) for i in stat[devices].T.to_numpy().argsort()],
+        times_min=stat[devices].min()
+    )
+
+    if vis:
+        visualize_metric(stat_sorted[devices], metric_sorted, name)
+
+    if verbose:
+        with open(osp.join(config_dir, name + '.json'), 'a') as ouf:
+            ouf.write(json.dumps(stat.config[best_config]).replace('\\"', '"')[1:-1])
             ouf.write('\n')
 
-        visualize_metric(layer, index, df_sorted, metric_sorted)
+        print(f'\tLayer {res["layer"]}, config={res["best_config"]}: metric={res["best_metric"]:.6f}, ' \
+            f'times={[round(i, 6) for i in res["times"]]}, times_order={res["times_order"]}')
+    
+    return res
 
-    df_sorted = df.sort_values(executors[0].key)
-    visualize_common(layer, index, df_sorted, best_config)
 
-
-def visualize_metric(layer: Layer, index: int, df: pd.DataFrame, metric: pd.Series) -> None:
-    fig = plt.figure(figsize=(8, 6))
-    name = "%d.%s" % (index, layer.name)
-    fig.suptitle(name, fontsize=16)
+def visualize_metric(df: pd.DataFrame, metric: pd.Series, name: str) -> None:
+    plt.figure(figsize=(8, 6))
     plt.xlabel("metric", fontsize=14)
     plt.ylabel("time, ms", fontsize=14)
     plt.plot(df.reset_index(drop=True), label=df.columns)
@@ -139,25 +150,10 @@ def visualize_metric(layer: Layer, index: int, df: pd.DataFrame, metric: pd.Seri
     plt.legend(prop={'size': 12})
     plt.xticks(range(len(metric)), [f"{m:.2f}" for m in metric])
     plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(6))
-    if not os.path.exists(os.path.join(output_dir, layer.tuner.value[0])):
-        os.makedirs(os.path.join(output_dir, layer.tuner.value[0]))
-    plt.savefig(os.path.join(output_dir, layer.tuner.value[0], name + "_metric.png"))
-    plt.close()
-
-
-def visualize_common(layer: Layer, index: int, df: pd.DataFrame, best_config: tp.Optional[int] = None) -> None:
-    fig = plt.figure(figsize=(8, 6))
-    name = "%d.%s" % (index, layer.name)
-    fig.suptitle(name, fontsize=16)
-    plt.xlabel("index", fontsize=14)
-    plt.ylabel("time, ms", fontsize=14)
-    plt.plot(df.reset_index(drop=True), label=df.columns)
-    if best_config is not None:
-        plt.axvline(x=np.arange(len(df))[df.index == best_config][0], color='black', ls='--', label='best config')
-    plt.legend(prop={'size': 12})
-    if not os.path.exists(os.path.join(output_dir, layer.tuner.value[0])):
-        os.makedirs(os.path.join(output_dir, layer.tuner.value[0]))
-    plt.savefig(os.path.join(output_dir, layer.tuner.value[0], name + ".png"))
+    tuner = name.split('.')[-1]
+    if not osp.exists(osp.join(output_dir, tuner)):
+        os.makedirs(osp.join(output_dir, tuner))
+    plt.savefig(osp.join(output_dir, tuner, name + ".png"))
     plt.close()
 
 

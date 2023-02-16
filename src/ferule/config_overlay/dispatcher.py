@@ -135,31 +135,26 @@ class HandleFile:
 
         self.full_layer_list: tp.List[Layer] = []
         with open(self.file) as inf:
-            if self.tuner == Tuner.ATVM:
-                layer, config_index = 0, 1
-                for line in inf:
-                    layer_config = json.loads(line)
-                    if config_index > layer_config['config']['index']:
-                        if self.full_layer_list != []:
-                            self.full_layer_list[-1].create_task()
+
+            for i, line in enumerate(inf):
+                layer_config = json.loads(line)
+                if self.tuner == Tuner.ATVM:
+                    if i == 0:
                         self.full_layer_list.append(Layer(self))
-                        config_index = 0
-                        layer += 1
-                    else:
-                        config_index += 1
-                    self.full_layer_list[-1].add_config(layer_config)
-            else:
-                layer = None
-                layer_index = 0
-                for line in inf:
-                    layer_config = json.loads(line)
-                    if layer != layer_config['i'][0][0]:
-                        layer = layer_config['i'][0][0]
-                        if self.full_layer_list != []:
-                            self.full_layer_list[-1].create_task()
+                    elif layer_config['config']['index'] < last:
+                        self.full_layer_list[-1].create_task()
                         self.full_layer_list.append(Layer(self))
-                        layer_index += 1
                     self.full_layer_list[-1].add_config(layer_config)
+                    last = layer_config['config']['index']
+
+                elif self.tuner == Tuner.ANSOR:
+                    if i == 0:
+                        self.full_layer_list.append(Layer(self))
+                    elif layer_config['i'][0][0] != last:
+                        self.full_layer_list[-1].create_task()
+                        self.full_layer_list.append(Layer(self))
+                    self.full_layer_list[-1].add_config(layer_config)
+                    last = layer_config['i'][0][0]
             
             if self.full_layer_list != []:
                 self.full_layer_list[-1].create_task()
