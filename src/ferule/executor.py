@@ -138,7 +138,7 @@ class Executor:
         mean_res, std_res = np.mean(prof_res), np.std(prof_res)
         print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res))
         self._disconnect_tracker()
-        return np.mean(prof_res)
+        return prof_res
 
     def xbenchmark(self, args: tp.Sequence[tvm.te.tensor.Tensor], dtype: str = "float32", input_path=None) -> float:
         if self.remote is None:
@@ -162,4 +162,4 @@ class Executor:
         mean_res, std_res = np.mean(prof_res), np.std(prof_res)
         print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (mean_res, std_res))
         self._disconnect_tracker()
-        return np.mean(prof_res)
+        return prof_res

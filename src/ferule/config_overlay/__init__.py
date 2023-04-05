@@ -1,4 +1,4 @@
-from .measure_common import Tuner, Layer, get_common_statistic, calculate_metric
+from .measure_common import Tuner, Layer, get_common_statistic, analize
 from .dispatcher import HandleFile
 from ..executor import Executor
 
