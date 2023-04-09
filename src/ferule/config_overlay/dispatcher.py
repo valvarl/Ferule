@@ -22,23 +22,48 @@ class Tuner(Enum):
     ANSOR = "ansor",
 
 
+class Config:
+    def __init__(self, config: tp.Dict, tuner: Tuner) -> None:
+        self.config = config    
+        self.tuner = tuner
+    
+    def __hash__(self) -> int:
+        if self.tuner == Tuner.ATVM:
+            tgt, task_name, task_args, task_kwargs = self.config["input"]
+            return hash(tupleit((tgt, task_name, task_args)))
+        elif self.tuner == Tuner.ANSOR:
+            return hash(tupleit(self.config["i"][0]))
+        
+    def __eq__(self, other):
+        return self.__hash__() == other.__hash__()
+    
+    def __len__(self) -> int:
+        return len(self.config)
+
+    def __getitem__(self, inp: tp.Any) -> tp.Any:
+        return self.config[inp]
+    
+    def get_time(self):
+        if self.tuner == Tuner.ATVM: 
+            return np.mean(self.config['result'][0]) if self.config['result'][1] == 0 else 1e9
+        elif self.tuner == Tuner.ANSOR:
+            return np.mean(self.config['r'][0]) if self.config['r'][1] == 0 else 1e9
+
+
 class Layer:
     def __init__(self, hf: HandleFile) -> None:
-        self.configs = []
+        self.configs: tp.List[Config] = []
         self.hf = hf
         self.tuner = self.hf.tuner
 
     def add_config(self, config: dict) -> None:
-        self.configs.append(config)
+        self.configs.append(Config(config, self.tuner))
 
     def get_config_time(self, idx):
-        if self.tuner == Tuner.ATVM: 
-            return np.mean(self.configs[idx]['result'][0]) if self.configs[idx]['result'][1] == 0 else 1e9
-        elif self.tuner == Tuner.ANSOR:
-            return np.mean(self.configs[idx]['r'][0]) if self.configs[idx]['r'][1] == 0 else 1e9
+        return self.configs[idx].get_time()
 
     def get_best_time(self) -> float:
-        return np.min([self.get_config_time(config) for config in range(len(self.configs))])
+        return np.min([config.get_time() for config in self.configs])
 
     def create_task(self) -> None:
         if self.tuner == Tuner.ATVM:
@@ -72,14 +97,16 @@ class Layer:
         return self.tuner.name        
 
     def __hash__(self) -> int:
-        if self.tuner == Tuner.ATVM:
-            tgt, task_name, task_args, task_kwargs = self.configs[0]["input"]
-            return hash(tupleit((tgt, task_name, task_args)))
-        elif self.tuner == Tuner.ANSOR:
-            return hash(tupleit(self.configs[0]["i"][0]))
+        return hash(self.configs[0])
 
     def __eq__(self, other):
         return self.__hash__() == other.__hash__()
+    
+    def __len__(self) -> int:
+        return len(self.configs)
+
+    def __getitem__(self, idx) -> Config:
+        return self.configs[idx]
 
 
 class HandleFile:
@@ -159,7 +186,7 @@ class HandleFile:
             if self.full_layer_list != []:
                 self.full_layer_list[-1].create_task()
         
-        self.layers = OrderedSet()
+        self.layers: tp.Set[Layer] = OrderedSet()
         for layer in self.full_layer_list:
             self.layers.add(layer)
 

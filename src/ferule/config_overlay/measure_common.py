@@ -18,7 +18,7 @@ from tvm.autotvm import task
 from tvm.contrib import utils
 
 from ..executor import Executor
-from .dispatcher import Layer, Tuner, HandleFile
+from .dispatcher import Config, Layer, Tuner, HandleFile
 from .. import view_folder, log_dir
 
 output_dir = osp.join(view_folder, "plots")
@@ -47,7 +47,7 @@ def get_common_statistic(
     data = np.zeros(len(layer.configs))
     for config_idx in tqdm(configs,  desc='Layer %d' % index):
         with open(tmp.relpath('config.json'), 'w') as conf:
-            json.dump(layer.configs[config_idx], conf)
+            json.dump(layer.configs[config_idx].config, conf)
 
         for i in range(3):
             with silence():
@@ -79,7 +79,7 @@ def get_common_statistic(
                 layer.configs[config_idx]['result'][0] = prof_res.tolist()
             elif layer.tuner == Tuner.ANSOR:
                 layer.configs[config_idx]['r'][0] = prof_res.tolist()
-            json.dump(layer.configs[config_idx], conf)
+            json.dump(layer.configs[config_idx].config, conf)
     
     tmp.remove()
     print(f'Layer {index} inference data saved at: {osp.join(config_dir, target_cfg_name)}')
@@ -95,66 +95,79 @@ def get_common_statistic(
     #         f'metric={metric:.6f}, est={[round(i, 6) for i in est]}, mean_est={est.mean():.6f}')
 
 
-def analize(host_to_target: tp.Dict[str, tp.Dict[str, HandleFile]]):
-    pass
+def analize(
+        host_to_target: tp.Dict[str, tp.Dict[str, HandleFile]], 
+        verbose: bool = False
+        ) -> tp.Tuple(tp.Dict[Layer, tp.Dict[Config, float]], tp.Dict[str, tp.Dict[Layer, float]]):
+    hosts = list(host_to_target.keys())
+    targets = list(host_to_target[hosts[0]].keys())
 
+    # Calculate metric
 
-def calculate_metric(
-    stat: pd.DataFrame,
-    name: str,
-    vis: bool = False, 
-    verbose: bool = False
-    ) -> dict:
-    
-    devices = stat.columns[1: -1]
-    stat = stat.loc[(stat[devices] > 0).all(axis=1)]
-    device_best_time = stat[devices].min()
+    layer_to_target_bt: tp.Dict[Layer, tp.Dict[str, tp.List[float]]] = dict()
 
-    pd.set_option('mode.chained_assignment', None)
-    stat['metric']  = stat[devices].sub(device_best_time.squeeze()).div(device_best_time.squeeze()).sum(axis=1)
+    for comp in (lambda x, y: x != y, lambda x, y: x == y):
+        for host in hosts:
+            for target in targets:
+                if comp(host, target):
+                    for layer in host_to_target[host][target].layers:
+                        if layer not in layer_to_target_bt:
+                            layer_to_target_bt[layer] = {target: [layer.get_best_time()]}
+                        else:
+                            layer_to_target_bt[layer][target].append(layer.get_best_time())
 
-    metric_sorted = stat.metric.sort_values()
-    stat_sorted = stat.loc[metric_sorted.index]
-    best_config = stat_sorted.index[0]
-    best_config_index = stat.reset_index().loc[stat.reset_index()['index'] == best_config].dropna().index[0]
+    config_times: tp.Dict[Layer, tp.Dict[Config, tp.Dict[str, float]]] = dict()
 
-    res = dict(
-        layer=stat.layer.iloc[0],
-        best_config=best_config,
-        best_metric=stat['metric'].min(),
-        times=stat.loc[best_config, devices],
-        times_order=[i.tolist().index(best_config_index) for i in stat[devices].T.to_numpy().argsort()],
-        times_min=stat[devices].min()
-    )
+    for sample_layer in layer_to_target_bt:
+        config_times[sample_layer] = dict()
+        for host in host:
+            for target in targets:
+                layer = host_to_target[host][target][layer]
+                if layer != sample_layer:
+                    continue
+                for sample_config in sample_layer.configs:
+                    if sample_config not in config_times[sample_layer]:
+                        config_times[sample_layer][sample_config] = dict()
+                    config_found = False
+                    for config in layer:
+                        if config != sample_config:
+                            continue
+                        config_found = True
+                        config_times[sample_layer][sample_config][target] = config.get_time()
+                        break
+                    assert config_found, "config not found"
 
-    if vis:
-        visualize_metric(stat_sorted[devices], metric_sorted, name)
+    metric: tp.Dict[Layer, tp.Dict[Config, float]] = dict()
 
-    if verbose:
-        with open(osp.join(config_dir, name + '.json'), 'a') as ouf:
-            ouf.write(json.dumps(stat.config[best_config]).replace('\\"', '"')[1:-1])
-            ouf.write('\n')
+    for layer in config_times:
+        metric[layer] = dict()
+        target_bt = min(layer_to_target_bt[layer])
+        for config in config_times[layer]:
+            m = 0
+            for target, time in config_times[layer][config].items():
+                m += (time - target_bt[target]) / target_bt[target]
+            metric[layer][config] = m
 
-        print(f'\tLayer {res["layer"]}, config={res["best_config"]}: metric={res["best_metric"]:.6f}, ' \
-            f'times={[round(i, 6) for i in res["times"]]}, times_order={res["times_order"]}')
-    
-    return res
+    # Calculate estimation 
 
+    estimate: tp.Dict[str, tp.Dict[Layer, float]] = dict()
 
-def visualize_metric(df: pd.DataFrame, metric: pd.Series, name: str) -> None:
-    plt.figure(figsize=(8, 6))
-    plt.xlabel("metric", fontsize=14)
-    plt.ylabel("time, ms", fontsize=14)
-    plt.plot(df.reset_index(drop=True), label=df.columns)
-    plt.plot(metric.reset_index(drop=True), '--', color='black', label='metric')
-    plt.legend(prop={'size': 12})
-    plt.xticks(range(len(metric)), [f"{m:.2f}" for m in metric])
-    plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(6))
-    tuner = name.split('.')[-1]
-    if not osp.exists(osp.join(output_dir, tuner)):
-        os.makedirs(osp.join(output_dir, tuner))
-    plt.savefig(osp.join(output_dir, tuner, name + ".png"))
-    plt.close()
+    best_configs: tp.Dict[Layer, Config] = {layer: sorted(zip(metric[layer].values(), metric[layer]))[0][1] for layer in metric}
+
+    for target in targets:
+        estimate[target] = dict()
+        if verbose:
+            print(f'[INFO]: Target {target} estimation')
+        for i, layer in enumerate(layer_to_target_bt):
+            target_times = layer_to_target_bt[layer][target]
+            t_min, t_max = min(target_times), max(target_times)
+            t_opt = best_configs[layer].get_time()
+            est = 1 - (t_opt - t_min) / (t_max - t_min)
+            estimate[target][layer] = est
+            if verbose:
+                print(f'layer={i}, t_min={t_min:.6f}, t_max={t_max:.6f}, t_opt={t_opt:.6f}, est={est:.6f}')
+
+    return metric, estimate
 
 
 @contextlib.contextmanager
