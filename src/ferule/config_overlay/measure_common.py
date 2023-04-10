@@ -38,21 +38,20 @@ def get_common_statistic(
     host_cfg_name = osp.basename(layer.hf.file)
     target_cfg_name = executor.key + '_' + host_cfg_name
 
-    configs = range(len(layer.configs))
+    configs = range(len(layer))
     if best is not None:
-        _a = [layer.get_config_time(c) for c in range(len(layer.configs))]
+        _a = [layer.get_config_time(c) for c in range(len(layer))]
         configs = np.argsort(_a)[:best]
     
     tmp = utils.tempdir()
-    data = np.zeros(len(layer.configs))
     for config_idx in tqdm(configs,  desc='Layer %d' % index):
         with open(tmp.relpath('config.json'), 'w') as conf:
-            json.dump(layer.configs[config_idx].config, conf)
+            json.dump(layer[config_idx].config, conf)
 
         for i in range(3):
             with silence():
                 if layer.tuner == Tuner.ATVM:
-                    config = task.space.ConfigEntity.from_json_dict(layer.configs[config_idx]['config'])
+                    config = task.space.ConfigEntity.from_json_dict(layer[config_idx]['config'])
                     with executor.target:
                         schedule, args = layer.task.instantiate(config)
                     mod = tvm.lower(schedule, args)
@@ -67,8 +66,7 @@ def get_common_statistic(
                     executor.compile_ansor(mod, None, tmp.relpath('config.json'), tmp.path)
 
             try:
-                prof_res = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so'))
-                data[config_idx] = np.mean(prof_res)
+                prof_res = executor.xbenchmark(args, layer.hf.dtype, tmp.relpath('config.so')) / 1000
                 break
             except tvm._ffi.base.TVMError:
                 print(f'Connection failed, {2 - i} attempts left...')
@@ -76,97 +74,109 @@ def get_common_statistic(
         
         with open(osp.join(config_dir, target_cfg_name), '+a') as conf:
             if layer.tuner == Tuner.ATVM:
-                layer.configs[config_idx]['result'][0] = prof_res.tolist()
+                layer[config_idx]['result'][0] = prof_res.tolist()
             elif layer.tuner == Tuner.ANSOR:
-                layer.configs[config_idx]['r'][0] = prof_res.tolist()
-            json.dump(layer.configs[config_idx].config, conf)
+                layer[config_idx]['r'][0] = prof_res.tolist()
+            json.dump(layer[config_idx].config, conf)
+            conf.write('\n')
     
     tmp.remove()
     print(f'Layer {index} inference data saved at: {osp.join(config_dir, target_cfg_name)}')
 
-    # if estimate is not None:
-    #     st = pd.read_csv(estimate)
-    #     common = calculate_metric(st[st.config == stat.loc[0, 'config']], '')
-    #     t_min, t_max = min(common['times_min']), max(common['times_min'])
-    #     t_opt = stat[devices].loc[0]
-    #     est = 1 - (t_opt - t_min) / (t_max - t_min)
-    #     metric = common['best_metric']
-    #     print(f'\tLayer {index}: t_opt={[round(t, 6) for t in t_opt]}, t_min={t_min:.6f}, t_max={t_max:.6f}, ' \
-    #         f'metric={metric:.6f}, est={[round(i, 6) for i in est]}, mean_est={est.mean():.6f}')
 
-
-def analize(
+def analyze_configs(
         host_to_target: tp.Dict[str, tp.Dict[str, HandleFile]], 
         verbose: bool = False
-        ) -> tp.Tuple(tp.Dict[Layer, tp.Dict[Config, float]], tp.Dict[str, tp.Dict[Layer, float]]):
+        ) -> tp.Tuple[tp.Dict[Layer, tp.Dict[str, tp.Dict[Config, float]]], tp.Dict[str, tp.Dict[Layer, float]]]:
     hosts = list(host_to_target.keys())
     targets = list(host_to_target[hosts[0]].keys())
 
     # Calculate metric
 
-    layer_to_target_bt: tp.Dict[Layer, tp.Dict[str, tp.List[float]]] = dict()
+    layer_to_target_bt: tp.Dict[Layer, tp.Dict[str, float]] = dict()
 
+    layers_skiped = False
     for comp in (lambda x, y: x != y, lambda x, y: x == y):
         for host in hosts:
             for target in targets:
                 if comp(host, target):
                     for layer in host_to_target[host][target].layers:
                         if layer not in layer_to_target_bt:
-                            layer_to_target_bt[layer] = {target: [layer.get_best_time()]}
-                        else:
-                            layer_to_target_bt[layer][target].append(layer.get_best_time())
+                            if host == target:
+                                layers_skiped = True
+                                continue
+                            layer_to_target_bt[layer] = dict()
+                        if host == target:
+                            layer_to_target_bt[layer][target] = layer.get_best_time()
+    if layers_skiped:
+        print('[INFO]: Unique layers from host configs are skipped')
 
-    config_times: tp.Dict[Layer, tp.Dict[Config, tp.Dict[str, float]]] = dict()
+    config_times: tp.Dict[Layer, tp.Dict[str, tp.Dict[Config, tp.Dict[str, float]]]] = dict()
 
     for sample_layer in layer_to_target_bt:
         config_times[sample_layer] = dict()
-        for host in host:
+        for host in hosts:
+            config_times[sample_layer][host] = dict()
             for target in targets:
-                layer = host_to_target[host][target][layer]
-                if layer != sample_layer:
-                    continue
-                for sample_config in sample_layer.configs:
-                    if sample_config not in config_times[sample_layer]:
-                        config_times[sample_layer][sample_config] = dict()
-                    config_found = False
-                    for config in layer:
-                        if config != sample_config:
-                            continue
-                        config_found = True
-                        config_times[sample_layer][sample_config][target] = config.get_time()
-                        break
-                    assert config_found, "config not found"
 
-    metric: tp.Dict[Layer, tp.Dict[Config, float]] = dict()
+                if host != target:
+                    layer = host_to_target[host][target][sample_layer]
+                    for config in layer:
+                        if config not in config_times[layer][host]:
+                            config_times[layer][host][config] = dict()
+                        config_times[layer][host][config][target] = config.get_time()
+                else:
+                    sl = host_to_target[host][targets[(targets.index(target) + 1) % len(targets)]][sample_layer]
+                    layer = host_to_target[host][target][sl]
+                    for c in sl:
+                        config = layer[layer.configs.index(c)]
+                        if config not in config_times[layer][host]:
+                            config_times[layer][host][config] = dict()
+                        config_times[layer][host][config][target] = config.get_time()
+
+    metric: tp.Dict[Layer, tp.Dict[str, tp.Dict[Config, float]]] = dict()
 
     for layer in config_times:
         metric[layer] = dict()
-        target_bt = min(layer_to_target_bt[layer])
-        for config in config_times[layer]:
-            m = 0
-            for target, time in config_times[layer][config].items():
-                m += (time - target_bt[target]) / target_bt[target]
-            metric[layer][config] = m
+        for host in config_times[layer]:
+            metric[layer][host] = dict()
+            for config in config_times[layer][host]:
+                m = 0
+                for target, time in config_times[layer][host][config].items():
+                    target_bt = layer_to_target_bt[layer][target]
+                    m += (time - target_bt) / target_bt
+                metric[layer][host][config] = m
 
     # Calculate estimation 
 
     estimate: tp.Dict[str, tp.Dict[Layer, float]] = dict()
 
-    best_configs: tp.Dict[Layer, Config] = {layer: sorted(zip(metric[layer].values(), metric[layer]))[0][1] for layer in metric}
+    best_configs_metric: tp.Dict[Layer, tp.Dict[str, Config]] = {layer: {host: sorted([(m, config) for config, m in metric[layer][host].items()], key=lambda x: x[0])[0][1] \
+                                                                         for host in metric[layer]} for layer in metric}
+    best_config_hosts: tp.Dict[Layer, tp.Dict[str, Config]] = {layer: {host: host_to_target[host][host][layer].get_best_config() for host in config_times[layer]} for layer in config_times}
 
     for target in targets:
         estimate[target] = dict()
         if verbose:
             print(f'[INFO]: Target {target} estimation')
         for i, layer in enumerate(layer_to_target_bt):
-            target_times = layer_to_target_bt[layer][target]
+            target_times = []
+            m = []
+            t_opt = []
+            for host in metric[layer]:
+                best_config = best_configs_metric[layer][host]
+                m.append(metric[layer][host][best_config])
+                t_opt.append(config_times[layer][host][best_config][target])
+                target_times.append(config_times[layer][host][best_config_hosts[layer][host]][target])
+
+            m, host, t_opt = sorted(zip(m, hosts, t_opt))[0]
             t_min, t_max = min(target_times), max(target_times)
-            t_opt = best_configs[layer].get_time()
+            t_min, t_max = min(t_min, t_opt), max(t_max, t_opt)
             est = 1 - (t_opt - t_min) / (t_max - t_min)
             estimate[target][layer] = est
             if verbose:
-                print(f'layer={i}, t_min={t_min:.6f}, t_max={t_max:.6f}, t_opt={t_opt:.6f}, est={est:.6f}')
-
+                print(f'layer={i} host={host:<8} metric={m:.6f} t_min={t_min:.8f} t_opt={t_opt:.8f} t_max={t_max:.8f} est={est:.6f}')
+    
     return metric, estimate
 
 

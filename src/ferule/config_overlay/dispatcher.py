@@ -30,7 +30,7 @@ class Config:
     def __hash__(self) -> int:
         if self.tuner == Tuner.ATVM:
             tgt, task_name, task_args, task_kwargs = self.config["input"]
-            return hash(tupleit((tgt, task_name, task_args)))
+            return hash(tupleit((tgt, task_name, task_args, self.config["config"]["entity"])))
         elif self.tuner == Tuner.ANSOR:
             return hash(tupleit(self.config["i"][0]))
         
@@ -63,7 +63,10 @@ class Layer:
         return self.configs[idx].get_time()
 
     def get_best_time(self) -> float:
-        return np.min([config.get_time() for config in self.configs])
+        return self.get_best_config().get_time()
+    
+    def get_best_config(self) -> Config:
+        return sorted(self.configs, key=lambda x: x.get_time())[0]
 
     def create_task(self) -> None:
         if self.tuner == Tuner.ATVM:
@@ -97,7 +100,11 @@ class Layer:
         return self.tuner.name        
 
     def __hash__(self) -> int:
-        return hash(self.configs[0])
+        if self.tuner == Tuner.ATVM:
+            tgt, task_name, task_args, task_kwargs = self.configs[0]["input"]
+            return hash(tupleit((tgt, task_name, task_args)))
+        elif self.tuner == Tuner.ANSOR:
+            return hash(tupleit(self.configs[0]["i"][0]))
 
     def __eq__(self, other):
         return self.__hash__() == other.__hash__()
@@ -168,11 +175,11 @@ class HandleFile:
                 if self.tuner == Tuner.ATVM:
                     if i == 0:
                         self.full_layer_list.append(Layer(self))
-                    elif layer_config['config']['index'] < last:
+                    elif layer_config['input'] != last:
                         self.full_layer_list[-1].create_task()
                         self.full_layer_list.append(Layer(self))
                     self.full_layer_list[-1].add_config(layer_config)
-                    last = layer_config['config']['index']
+                    last = layer_config['input']
 
                 elif self.tuner == Tuner.ANSOR:
                     if i == 0:

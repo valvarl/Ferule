@@ -7,7 +7,7 @@ import click
 import numpy as np
 
 from . import HandleFile, Executor
-from . import get_common_statistic, analize
+from . import get_common_statistic, analyze_configs
 from .. import target, target_host
 from ..model_importer import ModelImporter
 
@@ -63,7 +63,8 @@ def cli2() -> None:
 
 @click.command()
 @click.argument('logs', nargs=-1, type=click.Path(exists=True, resolve_path=True), required=True)
-def analize(logs: tp.Tuple[Path]) -> None:
+@click.option('-v', '--verbose', is_flag=True)
+def analyze(logs: tp.Tuple[Path], verbose: bool) -> None:
     """Calculates the optimal common configuration for multiple devices.
 
     LOGS is .json configuration files, including those left after remeasurement using the "collect" method.
@@ -73,29 +74,29 @@ def analize(logs: tp.Tuple[Path]) -> None:
 
     host_to_target = dict()
     for log in logs:
-        prefix = log.split(".")[0]
+        prefix = os.path.basename(log).split(".")[0]
         if '_' not in prefix:
             prefix = prefix + '_' + prefix
-        target, host = log.split('_')
+        target, host = prefix.split('_')
         if host in host_to_target:
-            assert target not in host_to_target[host], f'files with prefix "{log.split(".")[0]}" are duplicated'
+            assert target not in host_to_target[host], f'files with prefix "{os.path.basename(log).split(".")[0]}" are duplicated'
             host_to_target[host][target] = HandleFile(log)
         else:
             host_to_target[host] = {target: HandleFile(log)}
 
     hosts = list(host_to_target.keys())
-    assert np.array([len(host_to_target[hosts[0]] ^ host_to_target[h]) == 0 for h in hosts]).all(), \
+    assert np.array([len(host_to_target[hosts[0]].keys() ^ host_to_target[h].keys()) == 0 for h in hosts]).all(), \
     'for different hosts, a different set of target devices is specified'
     
     if len(host_to_target[hosts[0]]) != len(host_to_target):
         print('[INFO]: sets of hosts and targets are different')
 
-    analize(host_to_target)
+    analyze_configs(host_to_target, verbose)
 
 
 cli = click.CommandCollection(sources=[cli1, cli2])
 cli1.add_command(collect)
-cli2.add_command(analize)
+cli2.add_command(analyze)
 
 
 if __name__ == '__main__':
