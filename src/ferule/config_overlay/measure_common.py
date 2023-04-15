@@ -45,6 +45,8 @@ def get_common_statistic(
     
     tmp = utils.tempdir()
     for config_idx in tqdm(configs,  desc='Layer %d' % index):
+        layer[config_idx].set_target(executor.target)
+               
         with open(tmp.relpath('config.json'), 'w') as conf:
             json.dump(layer[config_idx].config, conf)
 

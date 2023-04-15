@@ -43,12 +43,18 @@ class Config:
     def __getitem__(self, inp: tp.Any) -> tp.Any:
         return self.config[inp]
     
-    def get_time(self):
+    def get_time(self) -> float:
         if self.tuner == Tuner.ATVM: 
             return np.mean(self.config['result'][0]) if self.config['result'][1] == 0 else 1e9
         elif self.tuner == Tuner.ANSOR:
             return np.mean(self.config['r'][0]) if self.config['r'][1] == 0 else 1e9
-
+        
+    def set_target(self, target: Target) -> None:
+        if self.tuner == Tuner.ATVM: 
+            self.config['input'][0] = str(target)
+        elif self.tuner == Tuner.ANSOR:
+            self.config['i'][0][1] = str(target)
+            self.config['i'][0][3] = str(target.host)
 
 class Layer:
     def __init__(self, hf: HandleFile) -> None:
